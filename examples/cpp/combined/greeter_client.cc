@@ -18,10 +18,12 @@
 
 #include <iostream>
 #include <memory>
+#include <vector>
 #include <string>
-
+#include "timer.h"
+#include "file_reader.h"
 #include <grpcpp/grpcpp.h>
-
+#include "metrics.h"
 #ifdef BAZEL_BUILD
 #include "examples/protos/helloworld.grpc.pb.h"
 #else
@@ -71,6 +73,18 @@ class GreeterClient {
   std::unique_ptr<Greeter::Stub> stub_;
 };
 
+std::string generateString(int n)
+{
+    std::string s="";
+    for(int i=0;i<n;i++)
+        s+=(char)('a'+rand()%26);
+
+    return s;
+
+}
+
+//Metrics GlobalRequestMetric;
+std::vector<int> packet_sizes = {4, 8, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 20000, 25000, 30000, 32768, 35000, 40000, 45000, 50000, 55000, 60000, 65000};
 int main(int argc, char** argv) {
   // Instantiate the client. It requires a channel, out of which the actual RPCs
   // are created. This channel models a connection to an endpoint specified by
@@ -78,7 +92,8 @@ int main(int argc, char** argv) {
   // We indicate that the channel isn't authenticated (use of
   // InsecureChannelCredentials()).
   std::string target_str;
-  std::string arg_str("--target");
+  Timer timer;
+    std::string arg_str("--target");
   if (argc > 1) {
     std::string arg_val = argv[1];
     size_t start_pos = arg_val.find(arg_str);
@@ -100,12 +115,47 @@ int main(int argc, char** argv) {
   }
   GreeterClient greeter(
       grpc::CreateChannel(target_str, grpc::InsecureChannelCredentials()));
+
+  //std::string header = "packet_size(in bytes),req_oh_min,req_oh_max,req_oh_mean,req_oh_med,req_oh_std_dev,rep_oh_min,rep_oh_max,rep_oh_mean,rep_oh_med,rep_oh_std_dev,rtt_min,rtt_max,rtt_mean,rtt_med,rtt_std_dev,bandwidth (MB/s)\n";
+  std::string header = "packet_size(in bytes),req_oh_min,req_oh_max,req_oh_mean,req_oh_med,req_oh_std_dev,rtt_min,rtt_max,rtt_mean,rtt_med,rtt_std_dev,bandwidth (MB/s)\n";
+  
+  FileReader file_reader("ResultDifferntSystem.csv");
+  file_reader.write_to_file(header);
+  //Try to generate Marshelling from variable string Length
   std::string user("world");
-  for(int i=0;i<10;i++)
-  {
-      user = user + "Kumar ";
-      std::string reply = greeter.SayHello(user);
-      std::cout << "Greeter received: " << reply << std::endl;
-  }
+  int len = packet_sizes.size();
+    for(int l = 0;l<len;l++)
+    { 
+      Metrics metric;
+      GlobalRequestMetric = metric;
+      //GlobalReplyMetric = metric;
+      double bandwidth = 0.0;
+      int iterations = 10000;
+      double time_accumulator = 0.0;
+      for(int i=1;i<=iterations;i++)
+      {
+          user = generateString(packet_sizes[l]);
+          timer.start();
+          std::string reply = greeter.SayHello(user);
+          timer.stop();
+          metric.add(timer.get_time_in_nanoseconds());
+          time_accumulator += timer.get_time_in_nanoseconds();
+          //std::cout<<"RTT: "<<timer.get_time_in_nanoseconds()<<std::endl;
+          //std::cout << "Greeter received: " << reply << std::endl;
+      }
+      bandwidth = 1e3 * ((packet_sizes[l] * iterations) / time_accumulator);
+      std::cout<<"String Len: "<<packet_sizes[l]<<std::endl;
+      //metric.pretty_print();
+      std::string fileString="";
+      fileString+=(to_string(packet_sizes[l])+ ",");
+      fileString+=(GlobalRequestMetric.get_metrics()+",");
+      //fileString+=(GlobalReplyMetric.get_metrics()+",");
+      fileString+=(metric.get_metrics() + ",");
+      fileString += (to_string(bandwidth) + "\n");
+
+      file_reader.write_to_file(fileString,true);
+      //std::cout<<"Serialize"<<std::endl;
+      //GlobalRequestMetric.pretty_print();
+    }
   return 0;
 }
